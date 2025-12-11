@@ -832,7 +832,6 @@ def run_sse(host: str, port: int):
         }}
         .btn {{
             position: fixed;
-            top: 10px;
             background: #333;
             color: #00ff00;
             border: 1px solid #00ff00;
@@ -846,8 +845,9 @@ def run_sse(host: str, port: int):
             background: #00ff00;
             color: #1a1a1a;
         }}
-        .btn-left {{ left: 10px; }}
-        .btn-right {{ right: 10px; }}
+        .btn-top-left {{ top: 10px; left: 10px; }}
+        .btn-top-right {{ top: 10px; right: 10px; }}
+        .btn-bottom-left {{ bottom: 15px; left: 15px; }}
         .bedtime-container {{
             text-align: center;
             padding: 15px;
@@ -989,8 +989,9 @@ def run_sse(host: str, port: int):
     </style>
 </head>
 <body>
-    <button class="btn btn-left" onclick="copyDbPath()">Copy DB Path</button>
-    <a href="/installation" class="btn btn-right">Installation</a>
+    <a href="/summary" class="btn btn-top-left">30 Day Recap</a>
+    <a href="/installation" class="btn btn-top-right">Installation</a>
+    <button class="btn btn-bottom-left" onclick="copyDbPath()">Copy DB Path</button>
     <pre>{terminal_output}</pre>
     <div class="bedtime-container">
         <div class="bedtime-label">BEDTIME COUNTDOWN</div>
@@ -1235,6 +1236,279 @@ coach-claude run        # Run server directly
 </html>"""
         return html.encode("utf-8")
 
+    async def render_summary_page() -> bytes:
+        """Render the 30-day summary page with charts."""
+        import json
+        from datetime import datetime, timedelta
+
+        # Get data
+        body_weight_history = await db.get_body_weight_history(30)
+        daily_water = await db.get_daily_water_stats(30)
+        daily_body_parts = await db.get_daily_body_part_stats(30)
+        current_weight = float(await db.get_config_value("body_weight") or 0)
+
+        # Generate last 30 days
+        today = datetime.now().date()
+        dates = [(today - timedelta(days=i)).isoformat() for i in range(29, -1, -1)]
+
+        # Build water data by date
+        water_by_date = {w["date"]: w["total"] for w in daily_water}
+
+        # Build body weight data by date
+        weight_by_date = {}
+        for log in body_weight_history:
+            date_str = log.datetime.date().isoformat()
+            if date_str not in weight_by_date:
+                weight_by_date[date_str] = log.weight
+
+        # Get all unique body parts
+        all_body_parts = set()
+        for day_stats in daily_body_parts.values():
+            all_body_parts.update(day_stats.keys())
+        all_body_parts = sorted(all_body_parts)
+
+        # Build chart data
+        chart_labels = [d[5:] for d in dates]  # MM-DD format
+        weight_data = [weight_by_date.get(d, None) for d in dates]
+        water_data = [water_by_date.get(d, 0) for d in dates]
+
+        # Build table rows
+        table_rows = []
+        for date in dates:
+            short_date = date[5:]  # MM-DD format
+            water = water_by_date.get(date, 0)
+            weight = weight_by_date.get(date, "")
+            body_part_data = daily_body_parts.get(date, {})
+
+            row = f"<tr><td>{short_date}</td><td>{water:.0f}</td><td>{weight}</td>"
+            for part in all_body_parts:
+                val = body_part_data.get(part, 0)
+                row += f"<td>{val:.0f}</td>" if val > 0 else "<td>-</td>"
+            row += "</tr>"
+            table_rows.append(row)
+
+        # Build header
+        header = "<tr><th>Date</th><th>Water (oz)</th><th>Weight (lbs)</th>"
+        for part in all_body_parts:
+            header += f"<th>{part.title()}</th>"
+        header += "</tr>"
+
+        html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Coach Claude - 30 Day Recap</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {{
+            background: #1a1a1a;
+            color: #00ff00;
+            font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+            padding: 20px;
+            margin: 0;
+        }}
+        h1, h2 {{
+            text-align: center;
+            margin-bottom: 10px;
+        }}
+        h2 {{
+            font-size: 16px;
+            color: #888;
+            margin-top: 30px;
+        }}
+        .current-weight {{
+            text-align: center;
+            font-size: 18px;
+            margin-bottom: 20px;
+            color: #888;
+        }}
+        .current-weight span {{
+            color: #00ff00;
+            font-size: 24px;
+        }}
+        .back-link {{
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            color: #00ff00;
+            text-decoration: none;
+            background: #333;
+            border: 1px solid #00ff00;
+            padding: 6px 12px;
+            font-size: 12px;
+            z-index: 100;
+        }}
+        .back-link:hover {{
+            background: #00ff00;
+            color: #1a1a1a;
+        }}
+        .charts-container {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            margin: 20px 0;
+            justify-content: center;
+        }}
+        .chart-box {{
+            background: #222;
+            border: 1px solid #333;
+            padding: 15px;
+            flex: 1;
+            min-width: 300px;
+            max-width: 600px;
+        }}
+        .chart-title {{
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }}
+        .table-container {{
+            overflow-x: auto;
+            margin-top: 20px;
+        }}
+        table {{
+            border-collapse: collapse;
+            width: 100%;
+            min-width: 600px;
+        }}
+        th, td {{
+            border: 1px solid #333;
+            padding: 8px 12px;
+            text-align: right;
+        }}
+        th {{
+            background: #222;
+            color: #00ff00;
+            position: sticky;
+            top: 0;
+        }}
+        th:first-child, td:first-child {{
+            text-align: left;
+            position: sticky;
+            left: 0;
+            background: #1a1a1a;
+            z-index: 1;
+        }}
+        th:first-child {{
+            background: #222;
+            z-index: 2;
+        }}
+        tr:hover {{
+            background: #252525;
+        }}
+        .legend {{
+            margin-top: 20px;
+            padding: 15px;
+            background: #222;
+            border: 1px solid #333;
+        }}
+        .legend-title {{
+            color: #00ff00;
+            margin-bottom: 10px;
+        }}
+        .legend-item {{
+            color: #888;
+            font-size: 12px;
+            margin: 5px 0;
+        }}
+    </style>
+</head>
+<body>
+    <a href="/" class="back-link">&larr; Dashboard</a>
+    <h1>30 Day Recap</h1>
+    <div class="current-weight">Current Weight: <span>{current_weight} lbs</span></div>
+
+    <div class="charts-container">
+        <div class="chart-box">
+            <div class="chart-title">Body Weight (lbs)</div>
+            <canvas id="weightChart"></canvas>
+        </div>
+        <div class="chart-box">
+            <div class="chart-title">Daily Water Intake (oz)</div>
+            <canvas id="waterChart"></canvas>
+        </div>
+    </div>
+
+    <h2>Daily Details</h2>
+    <div class="table-container">
+        <table>
+            <thead>
+                {header}
+            </thead>
+            <tbody>
+                {"".join(reversed(table_rows))}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="legend">
+        <div class="legend-title">Legend</div>
+        <div class="legend-item">Water: Daily water intake in ounces</div>
+        <div class="legend-item">Weight: Body weight measurement (lbs)</div>
+        <div class="legend-item">Body parts: Total weight moved (weight × reps) in lbs</div>
+    </div>
+
+    <script>
+        const labels = {json.dumps(chart_labels)};
+        const weightData = {json.dumps(weight_data)};
+        const waterData = {json.dumps(water_data)};
+
+        const chartDefaults = {{
+            responsive: true,
+            plugins: {{
+                legend: {{ display: false }}
+            }},
+            scales: {{
+                x: {{
+                    ticks: {{ color: '#888' }},
+                    grid: {{ color: '#333' }}
+                }},
+                y: {{
+                    ticks: {{ color: '#00ff00' }},
+                    grid: {{ color: '#333' }}
+                }}
+            }}
+        }};
+
+        // Weight chart
+        new Chart(document.getElementById('weightChart'), {{
+            type: 'line',
+            data: {{
+                labels: labels,
+                datasets: [{{
+                    data: weightData,
+                    borderColor: '#00ff00',
+                    backgroundColor: 'rgba(0, 255, 0, 0.1)',
+                    fill: true,
+                    tension: 0.3,
+                    spanGaps: true,
+                    pointRadius: weightData.map(v => v !== null ? 4 : 0),
+                    pointBackgroundColor: '#00ff00'
+                }}]
+            }},
+            options: chartDefaults
+        }});
+
+        // Water chart
+        new Chart(document.getElementById('waterChart'), {{
+            type: 'bar',
+            data: {{
+                labels: labels,
+                datasets: [{{
+                    data: waterData,
+                    backgroundColor: 'rgba(0, 150, 255, 0.6)',
+                    borderColor: '#0096ff',
+                    borderWidth: 1
+                }}]
+            }},
+            options: chartDefaults
+        }});
+    </script>
+</body>
+</html>"""
+        return html.encode("utf-8")
+
     async def broadcast_sessions():
         """Broadcast session count and details to all connected dashboard WebSockets."""
         import json
@@ -1369,6 +1643,22 @@ coach-claude run        # Run server directly
             elif path == "/installation" and method == "GET":
                 # Installation page
                 html = await render_installation_page(port)
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 200,
+                        "headers": [[b"content-type", b"text/html; charset=utf-8"]],
+                    }
+                )
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": html,
+                    }
+                )
+            elif path == "/summary" and method == "GET":
+                # Summary page
+                html = await render_summary_page()
                 await send(
                     {
                         "type": "http.response.start",

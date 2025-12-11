@@ -11,6 +11,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "water_threshold_minutes": 60,
     "workout_threshold_minutes": 120,
     "water_unit": "oz",
+    "bottle_size_oz": 16,  # Size of a "bottle" in oz
     "daily_water_goal": 64,
     "session_start_check": True,
     "periodic_check_enabled": True,

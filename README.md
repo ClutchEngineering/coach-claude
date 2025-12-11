@@ -118,6 +118,17 @@ black src/
 ruff check src/
 ```
 
+### Iteration Workflow
+
+When making changes to the server, use this workflow to test:
+
+```bash
+cd packages/mcp-server
+pipx install . --force && coach-claude install && coach-claude restart
+```
+
+Then reconnect Claude Code to the MCP server with `/mcp` in your chat.
+
 ## Release
 
 To publish a new version:
