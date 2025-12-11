@@ -60,6 +60,17 @@ class BodyWeightLog(BaseModel):
         return datetime.fromtimestamp(self.timestamp)
 
 
+class Streak(BaseModel):
+    """Streak tracking for goals."""
+
+    streak_type: str = Field(description="Type of streak: 'water' or 'workout'")
+    current: int = Field(default=0, description="Current streak in days")
+    longest: int = Field(default=0, description="Longest streak ever achieved")
+    last_completed_date: Optional[str] = Field(
+        default=None, description="Last date goal was met (YYYY-MM-DD)"
+    )
+
+
 class ConfigEntry(BaseModel):
     """Configuration entry."""
 

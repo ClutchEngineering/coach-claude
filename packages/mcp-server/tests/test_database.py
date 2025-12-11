@@ -242,3 +242,124 @@ class TestBodyPartStats:
 
         stats = await db.get_body_part_stats()
         assert stats["chest"] == 2000  # 200 * 10
+
+
+class TestStreaks:
+    """Tests for streak tracking functionality."""
+
+    async def test_streak_starts_at_zero(self, db):
+        """Test that streaks start at zero."""
+        streaks = await db.get_streaks()
+        assert streaks["water"].current == 0
+        assert streaks["workout"].current == 0
+        assert streaks["water"].longest == 0
+        assert streaks["workout"].longest == 0
+
+    async def test_streak_starts_when_goal_met(self, db):
+        """Test that streak starts at 1 when daily goal is first met."""
+        # Log enough water to meet daily goal (64 oz default)
+        await db.log_water(64, "oz")
+
+        streak = await db.check_and_update_water_streak()
+        assert streak is not None
+        assert streak.current == 1
+
+    async def test_streak_increments_on_consecutive_days(self, db):
+        """Test that streak increments for consecutive days."""
+        import aiosqlite
+        from datetime import date, timedelta
+
+        # Simulate yesterday's goal being met
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        async with aiosqlite.connect(db.db_path) as conn:
+            await conn.execute(
+                """INSERT OR REPLACE INTO streaks (streak_type, current, longest, last_completed_date)
+                   VALUES ('water', 1, 1, ?)""",
+                (yesterday,),
+            )
+            await conn.commit()
+
+        # Meet goal today
+        await db.log_water(64, "oz")
+        streak = await db.check_and_update_water_streak()
+
+        assert streak is not None
+        assert streak.current == 2
+        assert streak.longest == 2
+
+    async def test_streak_resets_on_gap(self, db):
+        """Test that streak resets to 1 when there's a gap."""
+        import aiosqlite
+        from datetime import date, timedelta
+
+        # Simulate a streak from 3 days ago (missed 2 days)
+        three_days_ago = (date.today() - timedelta(days=3)).isoformat()
+        async with aiosqlite.connect(db.db_path) as conn:
+            await conn.execute(
+                """INSERT OR REPLACE INTO streaks (streak_type, current, longest, last_completed_date)
+                   VALUES ('water', 5, 10, ?)""",
+                (three_days_ago,),
+            )
+            await conn.commit()
+
+        # Meet goal today
+        await db.log_water(64, "oz")
+        streak = await db.check_and_update_water_streak()
+
+        assert streak is not None
+        assert streak.current == 1  # Reset to 1
+        assert streak.longest == 10  # Longest preserved
+
+    async def test_streak_not_updated_if_goal_not_met(self, db):
+        """Test that streak is not updated if daily goal is not met."""
+        # Log water but not enough to meet goal
+        await db.log_water(16, "oz")
+
+        streak = await db.check_and_update_water_streak()
+        assert streak is None
+
+    async def test_workout_streak(self, db):
+        """Test workout streak tracking."""
+        # Log a workout (1 workout = daily goal met)
+        await db.log_workout("exercise", "pushups", 60)
+
+        streak = await db.check_and_update_workout_streak()
+        assert streak is not None
+        assert streak.current == 1
+
+    async def test_longest_streak_preserved(self, db):
+        """Test that longest streak is preserved even when current resets."""
+        import aiosqlite
+        from datetime import date, timedelta
+
+        # Set up a streak with high longest value
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        async with aiosqlite.connect(db.db_path) as conn:
+            await conn.execute(
+                """INSERT OR REPLACE INTO streaks (streak_type, current, longest, last_completed_date)
+                   VALUES ('workout', 3, 15, ?)""",
+                (yesterday,),
+            )
+            await conn.commit()
+
+        # Continue the streak
+        await db.log_workout("exercise", "squats", 60)
+        streak = await db.check_and_update_workout_streak()
+
+        assert streak is not None
+        assert streak.current == 4
+        assert streak.longest == 15  # Still 15, not overwritten
+
+    async def test_same_day_doesnt_change_streak(self, db):
+        """Test that logging multiple times same day doesn't change streak."""
+        # Meet goal
+        await db.log_water(64, "oz")
+        streak1 = await db.check_and_update_water_streak()
+        assert streak1.current == 1
+
+        # Log more water same day
+        await db.log_water(16, "oz")
+        streak2 = await db.check_and_update_water_streak()
+
+        # Streak should still be 1
+        assert streak2.current == 1

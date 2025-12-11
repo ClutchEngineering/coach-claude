@@ -13,6 +13,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "water_unit": "oz",
     "bottle_size_oz": 16,  # Size of a "bottle" in oz
     "daily_water_goal": 64,
+    "daily_workout_goal": 1,  # Number of workouts to count as meeting daily goal
     "session_start_check": True,
     "periodic_check_enabled": True,
     "quick_stretch_min": 30,

@@ -366,6 +366,37 @@ async def list_tools() -> list[Tool]:
                 },
             },
         ),
+        Tool(
+            name="get_streaks",
+            description="Get current streak information for water and workout goals",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
+        Tool(
+            name="set_streak",
+            description="Manually set streak values (for backfilling or corrections)",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "streak_type": {
+                        "type": "string",
+                        "enum": ["water", "workout"],
+                        "description": "Type of streak to set",
+                    },
+                    "current": {
+                        "type": "integer",
+                        "description": "Current streak value in days",
+                    },
+                    "longest": {
+                        "type": "integer",
+                        "description": "Longest streak ever (optional, defaults to current if not provided)",
+                    },
+                },
+                "required": ["streak_type", "current"],
+            },
+        ),
     ]
 
 
@@ -381,12 +412,16 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
             log = await db.log_water(amount, unit, notes, minutes_ago)
             time_str = f" ({minutes_ago} minutes ago)" if minutes_ago > 0 else ""
-            return [
-                TextContent(
-                    type="text",
-                    text=f"Logged {log.amount} {log.unit} of water at {log.datetime.strftime('%I:%M %p')}{time_str}",
-                )
-            ]
+
+            # Check if this completes the daily goal and update streak
+            result_text = f"Logged {log.amount} {log.unit} of water at {log.datetime.strftime('%I:%M %p')}{time_str}"
+            streak = await db.check_and_update_water_streak()
+            if streak and streak.current == 1 and streak.last_completed_date:
+                result_text += " 🎯 Daily water goal met!"
+            elif streak and streak.current > 1:
+                result_text += f" 🔥 {streak.current}-day water streak!"
+
+            return [TextContent(type="text", text=result_text)]
 
         elif name == "log_workout":
             workout_type = arguments["type"]
@@ -414,6 +449,13 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 if body_parts:
                     response += f" [{body_parts}]"
             response += f" at {log.datetime.strftime('%I:%M %p')}{time_str}"
+
+            # Check if this completes the daily goal and update streak
+            streak = await db.check_and_update_workout_streak()
+            if streak and streak.current == 1 and streak.last_completed_date:
+                response += " 🎯 Daily workout goal met!"
+            elif streak and streak.current > 1:
+                response += f" 🔥 {streak.current}-day workout streak!"
 
             return [TextContent(type="text", text=response)]
 
@@ -670,6 +712,45 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 result += f"  {date_str}: {log.weight} lbs{notes_str}\n"
             return [TextContent(type="text", text=result)]
 
+        elif name == "get_streaks":
+            streaks = await db.get_streaks()
+            water = streaks.get("water")
+            workout = streaks.get("workout")
+
+            result = "🔥 Streaks:\n\n"
+            if water:
+                result += f"  Water:   {water.current} day{'s' if water.current != 1 else ''}"
+                if water.longest > water.current:
+                    result += f" (best: {water.longest})"
+                result += "\n"
+            else:
+                result += "  Water:   0 days\n"
+
+            if workout:
+                result += f"  Workout: {workout.current} day{'s' if workout.current != 1 else ''}"
+                if workout.longest > workout.current:
+                    result += f" (best: {workout.longest})"
+                result += "\n"
+            else:
+                result += "  Workout: 0 days\n"
+
+            return [TextContent(type="text", text=result)]
+
+        elif name == "set_streak":
+            streak_type = arguments["streak_type"]
+            current = arguments["current"]
+            longest = arguments.get("longest", current)
+
+            # Ensure longest is at least current
+            if longest < current:
+                longest = current
+
+            streak = await db.set_streak(streak_type, current, longest)
+            result = f"🔥 Set {streak_type} streak: {streak.current} day{'s' if streak.current != 1 else ''}"
+            if streak.longest > streak.current:
+                result += f" (best: {streak.longest})"
+            return [TextContent(type="text", text=result)]
+
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
@@ -702,6 +783,7 @@ def run_sse(host: str, port: int):
         stats = await db.get_stats("today")
         last_water = await db.get_last_water()
         last_workout = await db.get_last_workout()
+        streaks = await db.get_streaks()
 
         # Get bedtime config
         bedtime_hour = int(await db.get_config_value("bedtime_hour"))
@@ -753,13 +835,57 @@ def run_sse(host: str, port: int):
         hours_left = time_to_bed // 60
         mins_left = time_to_bed % 60
 
-        # Fixed width for content area (inside the box, excluding border chars)
-        WIDTH = 34
+        # Build content sections first to calculate width
+        title = "COACH CLAUDE - TODAY"
+
+        # Stats section
+        stats_lines = []
+        water_str = f"{stats.total_water} {stats.water_unit}"
+        stats_lines.append(f"Water:       {water_str}")
+        stats_lines.append(f"Workouts:    {stats.workout_count}")
+        stats_lines.append(f"  Stretches: {stats.stretch_count}")
+        stats_lines.append(f"  Exercises: {stats.exercise_count}")
+
+        if stats.total_workout_duration > 0:
+            mins = stats.total_workout_duration // 60
+            secs = stats.total_workout_duration % 60
+            duration_str = f"{mins}m {secs}s" if mins > 0 else f"{secs}s"
+            stats_lines.append(f"Duration:    {duration_str}")
+
+        # Last activity section
+        last_lines = []
+        if last_water and stats.last_water_minutes_ago is not None:
+            water_time_str = format_time_ago(stats.last_water_minutes_ago, last_water.timestamp)
+            last_lines.append(f"Last water:   {water_time_str}")
+        else:
+            last_lines.append("Last water:   --")
+
+        if last_workout and stats.last_workout_minutes_ago is not None:
+            workout_time_str = format_time_ago(
+                stats.last_workout_minutes_ago, last_workout.timestamp
+            )
+            last_lines.append(f"Last workout: {workout_time_str}")
+        else:
+            last_lines.append("Last workout: --")
+
+        # Streak section
+        streak_lines = []
+        water_streak = streaks.get("water")
+        workout_streak = streaks.get("workout")
+        if water_streak and water_streak.current > 0:
+            streak_lines.append(f"Water streak:   {water_streak.current} days")
+        if workout_streak and workout_streak.current > 0:
+            streak_lines.append(f"Workout streak: {workout_streak.current} days")
+
+        # Calculate width: minimum 38, or expand to fit longest line
+        MIN_WIDTH = 38
+        all_content = [title] + stats_lines + last_lines + streak_lines
+        max_content = max(len(line) for line in all_content)
+        WIDTH = max(MIN_WIDTH, max_content)
 
         def pad_line(content: str) -> str:
             """Pad content to fixed width inside box."""
-            padded = content.ljust(WIDTH)
-            return f"| {padded} |"
+            return f"| {content.ljust(WIDTH)} |"
 
         def divider() -> str:
             """Create a horizontal divider line."""
@@ -768,36 +894,21 @@ def run_sse(host: str, port: int):
         # Build terminal-style output
         lines = []
         lines.append(divider())
-        lines.append(pad_line("COACH CLAUDE - TODAY".center(WIDTH)))
+        lines.append(pad_line(title.center(WIDTH)))
         lines.append(divider())
 
-        water_str = f"{stats.total_water} {stats.water_unit}"
-        lines.append(pad_line(f"Water:       {water_str}"))
-        lines.append(pad_line(f"Workouts:    {stats.workout_count}"))
-        lines.append(pad_line(f"  Stretches: {stats.stretch_count}"))
-        lines.append(pad_line(f"  Exercises: {stats.exercise_count}"))
-
-        if stats.total_workout_duration > 0:
-            mins = stats.total_workout_duration // 60
-            secs = stats.total_workout_duration % 60
-            duration_str = f"{mins}m {secs}s" if mins > 0 else f"{secs}s"
-            lines.append(pad_line(f"Duration:    {duration_str}"))
+        for line in stats_lines:
+            lines.append(pad_line(line))
 
         lines.append(divider())
 
-        if last_water and stats.last_water_minutes_ago is not None:
-            water_time_str = format_time_ago(stats.last_water_minutes_ago, last_water.timestamp)
-            lines.append(pad_line(f"Last water:   {water_time_str}"))
-        else:
-            lines.append(pad_line("Last water:   --"))
+        for line in last_lines:
+            lines.append(pad_line(line))
 
-        if last_workout and stats.last_workout_minutes_ago is not None:
-            workout_time_str = format_time_ago(
-                stats.last_workout_minutes_ago, last_workout.timestamp
-            )
-            lines.append(pad_line(f"Last workout: {workout_time_str}"))
-        else:
-            lines.append(pad_line("Last workout: --"))
+        if streak_lines:
+            lines.append(divider())
+            for line in streak_lines:
+                lines.append(pad_line(line))
 
         lines.append(divider())
 

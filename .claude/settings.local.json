@@ -25,7 +25,10 @@
       "mcp__coach-claude__delete_water",
       "Bash(python -m pytest:*)",
       "Bash(python:*)",
-      "mcp__coach-claude__get_last_water"
+      "mcp__coach-claude__get_last_water",
+      "mcp__coach-claude__get_stats",
+      "mcp__coach-claude__set_streak",
+      "mcp__coach-claude__get_streaks"
     ]
   }
 }
