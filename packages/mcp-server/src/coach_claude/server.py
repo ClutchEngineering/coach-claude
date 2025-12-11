@@ -618,7 +618,9 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             weight = arguments["weight"]
             notes = arguments.get("notes")
             log = await db.log_body_weight(weight, notes)
-            result = f"⚖️ Logged body weight: {log.weight} lbs at {log.datetime.strftime('%I:%M %p')}"
+            result = (
+                f"⚖️ Logged body weight: {log.weight} lbs at {log.datetime.strftime('%I:%M %p')}"
+            )
             if notes:
                 result += f" ({notes})"
             return [TextContent(type="text", text=result)]

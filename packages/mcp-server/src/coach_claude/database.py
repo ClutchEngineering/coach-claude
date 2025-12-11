@@ -149,7 +149,11 @@ class Database:
             log_id = cursor.lastrowid
 
         return WaterLog(
-            id=log_id, amount=normalized_amount, unit=standard_unit, timestamp=timestamp, notes=notes
+            id=log_id,
+            amount=normalized_amount,
+            unit=standard_unit,
+            timestamp=timestamp,
+            notes=notes,
         )
 
     async def log_workout(
