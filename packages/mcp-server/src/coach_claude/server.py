@@ -1718,9 +1718,16 @@ coach-claude run        # Run server directly
 
 def cmd_install(args):
     """Install daemon, skill, and MCP config."""
+    from importlib.metadata import version
+
     from . import daemon, skill
 
-    print("Installing Coach Claude...\n")
+    try:
+        pkg_version = version("coach-claude")
+    except Exception:
+        pkg_version = "unknown"
+
+    print(f"Installing Coach Claude v{pkg_version}...\n")
 
     # Check OS
     system = daemon.get_system()
@@ -1847,13 +1854,20 @@ def cmd_restart(args):
 
 def cmd_status(args):
     """Show daemon status."""
+    from importlib.metadata import version
+
     from . import daemon, skill, claude_settings
+
+    try:
+        pkg_version = version("coach-claude")
+    except Exception:
+        pkg_version = "unknown"
 
     status = daemon.status()
     skill_installed = skill.is_installed()
     mcp_configured = claude_settings.is_mcp_configured()
 
-    print("Coach Claude Status\n")
+    print(f"Coach Claude v{pkg_version}\n")
     print(f"System:      {status['system']}")
     print(f"Daemon:      {'Installed' if status['installed'] else 'Not installed'}")
     print(f"Running:     {'Yes' if status['running'] else 'No'}")
