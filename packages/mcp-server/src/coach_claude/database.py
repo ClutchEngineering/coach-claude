@@ -10,6 +10,35 @@ from .config import DEFAULT_CONFIG, get_db_path
 from .models import WaterLog, WorkoutLog, BodyWeightLog, Stats, ReminderStatus
 
 
+def _format_time_ago(minutes: int, timestamp: int = None) -> str:
+    """Format minutes ago into human-friendly text."""
+    if minutes < 5:
+        return "just now"
+    elif minutes < 15:
+        return "a few minutes ago"
+    elif minutes < 30:
+        return "about 20 minutes ago"
+    elif minutes < 45:
+        return "about half an hour ago"
+    elif minutes < 75:
+        return "about an hour ago"
+    elif minutes < 120:
+        return "a bit over an hour ago"
+    elif minutes < 180:
+        return "a couple hours ago"
+    else:
+        if timestamp:
+            dt = datetime.fromtimestamp(timestamp)
+            return f"around {dt.strftime('%I:%M %p').lstrip('0')}"
+        else:
+            hours = minutes // 60
+            if hours < 24:
+                return f"about {hours} hours ago"
+            else:
+                days = hours // 24
+                return f"about {days} day{'s' if days > 1 else ''} ago"
+
+
 class Database:
     """SQLite database manager for Coach Claude."""
 
@@ -331,7 +360,8 @@ class Database:
             water_minutes_ago = (now - last_water.timestamp) // 60
             if water_minutes_ago >= water_threshold:
                 water_due = True
-                water_message = f"It's been {water_minutes_ago} minutes since your last water. Time for a drink!"
+                time_str = _format_time_ago(water_minutes_ago, last_water.timestamp)
+                water_message = f"You last had water {time_str}. Time for a drink!"
         else:
             water_due = True
             water_message = "No water logged yet today. Stay hydrated!"
@@ -340,7 +370,10 @@ class Database:
             workout_minutes_ago = (now - last_workout.timestamp) // 60
             if workout_minutes_ago >= workout_threshold:
                 workout_due = True
-                workout_message = f"It's been {workout_minutes_ago} minutes since your last movement. Time for a quick stretch or exercise!"
+                time_str = _format_time_ago(workout_minutes_ago, last_workout.timestamp)
+                workout_message = (
+                    f"Your last movement was {time_str}. Time for a quick stretch or exercise!"
+                )
         else:
             workout_due = True
             workout_message = "No workouts logged yet today. Take a movement break!"

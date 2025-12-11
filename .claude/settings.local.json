@@ -23,7 +23,9 @@
       "mcp__coach-claude__log_body_weight",
       "mcp__coach-claude__list_recent_water",
       "mcp__coach-claude__delete_water",
-      "Bash(python -m pytest:*)"
+      "Bash(python -m pytest:*)",
+      "Bash(python:*)",
+      "mcp__coach-claude__get_last_water"
     ]
   }
 }

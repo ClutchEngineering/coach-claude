@@ -13,6 +13,46 @@ from .database import Database
 from .config import get_db_path, DEFAULT_PORT
 
 
+def format_time_ago(minutes: int, timestamp: int = None) -> str:
+    """Format minutes ago into human-friendly text.
+
+    Args:
+        minutes: Number of minutes ago
+        timestamp: Optional unix timestamp (used to show actual time for longer durations)
+
+    Returns:
+        Human-friendly time string like "a few minutes ago" or "around 9:30 AM"
+    """
+    from datetime import datetime
+
+    if minutes < 5:
+        return "just now"
+    elif minutes < 15:
+        return "a few minutes ago"
+    elif minutes < 30:
+        return "about 20 minutes ago"
+    elif minutes < 45:
+        return "about half an hour ago"
+    elif minutes < 75:
+        return "about an hour ago"
+    elif minutes < 120:
+        return "a bit over an hour ago"
+    elif minutes < 180:
+        return "a couple hours ago"
+    else:
+        # For longer times, show the actual time
+        if timestamp:
+            dt = datetime.fromtimestamp(timestamp)
+            return f"around {dt.strftime('%I:%M %p').lstrip('0')}"
+        else:
+            hours = minutes // 60
+            if hours < 24:
+                return f"about {hours} hours ago"
+            else:
+                days = hours // 24
+                return f"about {days} day{'s' if days > 1 else ''} ago"
+
+
 # Initialize database
 db = Database(get_db_path())
 
@@ -380,13 +420,12 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         elif name == "get_last_water":
             log = await db.get_last_water()
             if log:
-                import time
-
                 minutes_ago = (int(time.time()) - log.timestamp) // 60
+                time_ago_str = format_time_ago(minutes_ago, log.timestamp)
                 return [
                     TextContent(
                         type="text",
-                        text=f"Last water: {log.amount} {log.unit} at {log.datetime.strftime('%I:%M %p')} ({minutes_ago} minutes ago)",
+                        text=f"Last water: {log.amount} {log.unit} ({time_ago_str})",
                     )
                 ]
             return [TextContent(type="text", text="No water logged yet")]
@@ -394,9 +433,8 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         elif name == "get_last_workout":
             log = await db.get_last_workout()
             if log:
-                import time
-
                 minutes_ago = (int(time.time()) - log.timestamp) // 60
+                time_ago_str = format_time_ago(minutes_ago, log.timestamp)
                 duration_str = (
                     f"{log.duration // 60}m {log.duration % 60}s"
                     if log.duration >= 60
@@ -405,7 +443,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 return [
                     TextContent(
                         type="text",
-                        text=f"Last workout: {log.type} - '{log.name}' ({duration_str}) at {log.datetime.strftime('%I:%M %p')} ({minutes_ago} minutes ago)",
+                        text=f"Last workout: {log.type} - '{log.name}' ({duration_str}) - {time_ago_str}",
                     )
                 ]
             return [TextContent(type="text", text="No workouts logged yet")]
@@ -465,18 +503,16 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             if status.water_due and status.water_message:
                 result_parts.append(f"💧 Water: {status.water_message}")
             elif status.last_water_minutes_ago is not None:
-                result_parts.append(
-                    f"💧 Water: OK (last drink {status.last_water_minutes_ago} minutes ago, threshold: {status.water_threshold} minutes)"
-                )
+                water_time = format_time_ago(status.last_water_minutes_ago)
+                result_parts.append(f"💧 Water: OK (last drink {water_time})")
             else:
                 result_parts.append("💧 Water: No logs yet")
 
             if status.workout_due and status.workout_message:
                 result_parts.append(f"🏃 Workout: {status.workout_message}")
             elif status.last_workout_minutes_ago is not None:
-                result_parts.append(
-                    f"🏃 Workout: OK (last workout {status.last_workout_minutes_ago} minutes ago, threshold: {status.workout_threshold} minutes)"
-                )
+                workout_time = format_time_ago(status.last_workout_minutes_ago)
+                result_parts.append(f"🏃 Workout: OK (last workout {workout_time})")
             else:
                 result_parts.append("🏃 Workout: No logs yet")
 
@@ -497,9 +533,9 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 result += f"⏱️  Total duration: {minutes}m {seconds}s\n"
 
             if stats.last_water_minutes_ago is not None:
-                result += f"\n⏰ Last water: {stats.last_water_minutes_ago} minutes ago"
+                result += f"\n⏰ Last water: {format_time_ago(stats.last_water_minutes_ago)}"
             if stats.last_workout_minutes_ago is not None:
-                result += f"\n⏰ Last workout: {stats.last_workout_minutes_ago} minutes ago"
+                result += f"\n⏰ Last workout: {format_time_ago(stats.last_workout_minutes_ago)}"
 
             return [TextContent(type="text", text=result)]
 
@@ -524,8 +560,6 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 return [TextContent(type="text", text=result)]
 
         elif name == "list_recent_water":
-            import time
-
             limit = arguments.get("limit", 5)
             logs = await db.get_recent_water(limit)
             if not logs:
@@ -538,8 +572,6 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             return [TextContent(type="text", text=result)]
 
         elif name == "list_recent_workouts":
-            import time
-
             limit = arguments.get("limit", 5)
             logs = await db.get_recent_workouts(limit)
             if not logs:
@@ -754,12 +786,14 @@ def run_sse(host: str, port: int):
         lines.append(divider())
 
         if last_water and stats.last_water_minutes_ago is not None:
-            lines.append(pad_line(f"Last water:   {stats.last_water_minutes_ago} min ago"))
+            water_time_str = format_time_ago(stats.last_water_minutes_ago, last_water.timestamp)
+            lines.append(pad_line(f"Last water:   {water_time_str}"))
         else:
             lines.append(pad_line("Last water:   --"))
 
         if last_workout and stats.last_workout_minutes_ago is not None:
-            lines.append(pad_line(f"Last workout: {stats.last_workout_minutes_ago} min ago"))
+            workout_time_str = format_time_ago(stats.last_workout_minutes_ago, last_workout.timestamp)
+            lines.append(pad_line(f"Last workout: {workout_time_str}"))
         else:
             lines.append(pad_line("Last workout: --"))
 
