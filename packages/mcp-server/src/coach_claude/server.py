@@ -792,7 +792,9 @@ def run_sse(host: str, port: int):
             lines.append(pad_line("Last water:   --"))
 
         if last_workout and stats.last_workout_minutes_ago is not None:
-            workout_time_str = format_time_ago(stats.last_workout_minutes_ago, last_workout.timestamp)
+            workout_time_str = format_time_ago(
+                stats.last_workout_minutes_ago, last_workout.timestamp
+            )
             lines.append(pad_line(f"Last workout: {workout_time_str}"))
         else:
             lines.append(pad_line("Last workout: --"))
