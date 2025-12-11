@@ -55,6 +55,17 @@ jobs:
     - name: Install build tools
       run: pip install build
 
+    - name: Extract version from tag
+      id: get_version
+      run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+    - name: Update package version
+      working-directory: packages/mcp-server
+      run: |
+        sed -i 's/^version = ".*"/version = "${{ steps.get_version.outputs.VERSION }}"/' pyproject.toml
+        echo "Updated version to ${{ steps.get_version.outputs.VERSION }}"
+        grep "^version" pyproject.toml
+
     - name: Build package
       working-directory: packages/mcp-server
       run: python -m build
