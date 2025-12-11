@@ -7,7 +7,7 @@ from typing import Optional, List, Dict
 from datetime import datetime, timedelta
 
 from .config import DEFAULT_CONFIG, get_db_path
-from .models import WaterLog, WorkoutLog, BodyWeightLog, Stats, ReminderStatus
+from .models import WaterLog, WorkoutLog, BodyWeightLog, Streak, Stats, ReminderStatus
 
 
 def _format_time_ago(minutes: int, timestamp: int = None) -> str:
@@ -104,6 +104,17 @@ class Database:
                     weight REAL NOT NULL,
                     timestamp INTEGER NOT NULL,
                     notes TEXT
+                )
+                """
+            )
+
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS streaks (
+                    streak_type TEXT PRIMARY KEY,
+                    current INTEGER DEFAULT 0,
+                    longest INTEGER DEFAULT 0,
+                    last_completed_date TEXT
                 )
                 """
             )
@@ -714,3 +725,121 @@ class Database:
                     daily_stats[day][part] = daily_stats[day].get(part, 0) + total
 
         return daily_stats
+
+    async def get_streaks(self) -> Dict[str, Streak]:
+        """Get all streak data."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT * FROM streaks")
+            rows = await cursor.fetchall()
+
+        streaks = {}
+        for row in rows:
+            streaks[row["streak_type"]] = Streak(
+                streak_type=row["streak_type"],
+                current=row["current"],
+                longest=row["longest"],
+                last_completed_date=row["last_completed_date"],
+            )
+
+        # Return defaults for missing streak types
+        for streak_type in ["water", "workout"]:
+            if streak_type not in streaks:
+                streaks[streak_type] = Streak(streak_type=streak_type)
+
+        return streaks
+
+    async def update_streak(self, streak_type: str) -> Streak:
+        """Update streak for a given type. Call when daily goal is met."""
+        today = datetime.now().date().isoformat()
+        yesterday = (datetime.now().date() - timedelta(days=1)).isoformat()
+
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT * FROM streaks WHERE streak_type = ?", (streak_type,))
+            row = await cursor.fetchone()
+
+            if row:
+                current = row["current"]
+                longest = row["longest"]
+                last_date = row["last_completed_date"]
+
+                if last_date == today:
+                    # Already counted today, no change
+                    return Streak(
+                        streak_type=streak_type,
+                        current=current,
+                        longest=longest,
+                        last_completed_date=last_date,
+                    )
+                elif last_date == yesterday:
+                    # Consecutive day, increment streak
+                    current += 1
+                else:
+                    # Gap in streak, reset to 1
+                    current = 1
+
+                longest = max(longest, current)
+
+                await db.execute(
+                    """UPDATE streaks
+                       SET current = ?, longest = ?, last_completed_date = ?
+                       WHERE streak_type = ?""",
+                    (current, longest, today, streak_type),
+                )
+            else:
+                # First time, create streak
+                current = 1
+                longest = 1
+                await db.execute(
+                    """INSERT INTO streaks (streak_type, current, longest, last_completed_date)
+                       VALUES (?, ?, ?, ?)""",
+                    (streak_type, current, longest, today),
+                )
+
+            await db.commit()
+
+        return Streak(
+            streak_type=streak_type,
+            current=current,
+            longest=longest,
+            last_completed_date=today,
+        )
+
+    async def check_and_update_water_streak(self) -> Optional[Streak]:
+        """Check if water goal is met today and update streak if so."""
+        stats = await self.get_stats("today")
+        daily_goal = float(await self.get_config_value("daily_water_goal"))
+
+        if stats.total_water >= daily_goal:
+            return await self.update_streak("water")
+        return None
+
+    async def check_and_update_workout_streak(self) -> Optional[Streak]:
+        """Check if workout goal is met today and update streak if so."""
+        stats = await self.get_stats("today")
+        # Default: any workout counts as meeting the goal
+        daily_goal = int(await self.get_config_value("daily_workout_goal") or 1)
+
+        if stats.workout_count >= daily_goal:
+            return await self.update_streak("workout")
+        return None
+
+    async def set_streak(self, streak_type: str, current: int, longest: int) -> Streak:
+        """Manually set streak values (for backfilling or corrections)."""
+        today = datetime.now().date().isoformat()
+
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """INSERT OR REPLACE INTO streaks (streak_type, current, longest, last_completed_date)
+                   VALUES (?, ?, ?, ?)""",
+                (streak_type, current, longest, today),
+            )
+            await db.commit()
+
+        return Streak(
+            streak_type=streak_type,
+            current=current,
+            longest=longest,
+            last_completed_date=today,
+        )
