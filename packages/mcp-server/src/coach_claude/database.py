@@ -112,21 +112,49 @@ class Database:
         notes: Optional[str] = None,
         minutes_ago: int = 0,
     ) -> WaterLog:
-        """Log water intake."""
+        """Log water intake. Converts all units to oz for consistency."""
+        standard_unit = await self.get_config_value("water_unit")
+
+        # Convert to oz if a different unit is provided
         if unit is None:
-            unit = await self.get_config_value("water_unit")
+            unit = standard_unit
+
+        # Normalize the amount to oz
+        unit_lower = unit.lower().strip()
+        if unit_lower in ("oz", "ounce", "ounces"):
+            normalized_amount = amount
+        elif unit_lower in ("ml", "milliliter", "milliliters"):
+            normalized_amount = amount / 29.5735  # ml to oz
+        elif unit_lower in ("l", "liter", "liters", "litre", "litres"):
+            normalized_amount = amount * 33.814  # liters to oz
+        elif unit_lower in ("cup", "cups"):
+            normalized_amount = amount * 8  # cups to oz
+        elif unit_lower in ("bottle", "bottles"):
+            bottle_size = float(await self.get_config_value("bottle_size_oz"))
+            normalized_amount = amount * bottle_size
+        elif unit_lower in ("glass", "glasses"):
+            normalized_amount = amount * 8  # assume 8oz glass
+        else:
+            # Unknown unit, store as-is but warn
+            normalized_amount = amount
 
         timestamp = int(time.time()) - (minutes_ago * 60)
 
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 "INSERT INTO water_logs (amount, unit, timestamp, notes) VALUES (?, ?, ?, ?)",
-                (amount, unit, timestamp, notes),
+                (normalized_amount, standard_unit, timestamp, notes),
             )
             await db.commit()
             log_id = cursor.lastrowid
 
-        return WaterLog(id=log_id, amount=amount, unit=unit, timestamp=timestamp, notes=notes)
+        return WaterLog(
+            id=log_id,
+            amount=normalized_amount,
+            unit=standard_unit,
+            timestamp=timestamp,
+            notes=notes,
+        )
 
     async def log_workout(
         self,
@@ -587,3 +615,69 @@ class Database:
             )
             for row in rows
         ]
+
+    async def get_daily_water_stats(self, days: int = 30) -> List[Dict]:
+        """Get daily water intake for the last N days."""
+        now = datetime.now()
+        start = now - timedelta(days=days)
+        start_timestamp = int(start.timestamp())
+
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                """
+                SELECT date(timestamp, 'unixepoch', 'localtime') as day,
+                       SUM(amount) as total,
+                       unit
+                FROM water_logs
+                WHERE timestamp >= ?
+                GROUP BY day, unit
+                ORDER BY day DESC
+                """,
+                (start_timestamp,),
+            )
+            rows = await cursor.fetchall()
+
+        return [{"date": row[0], "total": row[1], "unit": row[2]} for row in rows]
+
+    async def get_daily_body_part_stats(self, days: int = 30) -> Dict[str, Dict[str, float]]:
+        """Get daily weight moved per body part for the last N days."""
+        now = datetime.now()
+        start = now - timedelta(days=days)
+        start_timestamp = int(start.timestamp())
+        body_weight = float(await self.get_config_value("body_weight") or 0)
+
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """
+                SELECT date(timestamp, 'unixepoch', 'localtime') as day,
+                       weight, reps, body_parts
+                FROM workout_logs
+                WHERE timestamp >= ? AND reps IS NOT NULL AND body_parts IS NOT NULL
+                ORDER BY day DESC
+                """,
+                (start_timestamp,),
+            )
+            rows = await cursor.fetchall()
+
+        # Aggregate by day and body part
+        daily_stats: Dict[str, Dict[str, float]] = {}
+        for row in rows:
+            day = row["day"]
+            reps = row["reps"]
+            parts = row["body_parts"]
+            weight = row["weight"] if row["weight"] else body_weight
+
+            if not reps or not parts or weight <= 0:
+                continue
+
+            if day not in daily_stats:
+                daily_stats[day] = {}
+
+            total = weight * reps
+            for part in parts.split(","):
+                part = part.strip().lower()
+                if part:
+                    daily_stats[day][part] = daily_stats[day].get(part, 0) + total
+
+        return daily_stats
