@@ -843,3 +843,62 @@ class Database:
             longest=longest,
             last_completed_date=today,
         )
+
+    async def get_yearly_activity(self) -> Dict[str, Dict[str, bool]]:
+        """Get daily activity data for the past year.
+
+        Returns:
+            Dict mapping date strings (YYYY-MM-DD) to dict with 'water' and 'workout' bools
+        """
+        now = datetime.now()
+        start = now - timedelta(days=365)
+        start_timestamp = int(start.timestamp())
+
+        # Get daily water goal
+        daily_water_goal = float(await self.get_config_value("daily_water_goal") or 64)
+        daily_workout_goal = int(await self.get_config_value("daily_workout_goal") or 1)
+
+        activity: Dict[str, Dict[str, bool]] = {}
+
+        async with aiosqlite.connect(self.db_path) as db:
+            # Get water totals per day
+            cursor = await db.execute(
+                """
+                SELECT date(timestamp, 'unixepoch', 'localtime') as day,
+                       SUM(amount) as total
+                FROM water_logs
+                WHERE timestamp >= ?
+                GROUP BY day
+                """,
+                (start_timestamp,),
+            )
+            water_rows = await cursor.fetchall()
+
+            for row in water_rows:
+                day = row[0]
+                total = row[1] or 0
+                if day not in activity:
+                    activity[day] = {"water": False, "workout": False}
+                activity[day]["water"] = total >= daily_water_goal
+
+            # Get workout counts per day
+            cursor = await db.execute(
+                """
+                SELECT date(timestamp, 'unixepoch', 'localtime') as day,
+                       COUNT(*) as count
+                FROM workout_logs
+                WHERE timestamp >= ?
+                GROUP BY day
+                """,
+                (start_timestamp,),
+            )
+            workout_rows = await cursor.fetchall()
+
+            for row in workout_rows:
+                day = row[0]
+                count = row[1] or 0
+                if day not in activity:
+                    activity[day] = {"water": False, "workout": False}
+                activity[day]["workout"] = count >= daily_workout_goal
+
+        return activity

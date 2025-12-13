@@ -43,6 +43,14 @@ def format_time_ago(minutes: int, timestamp: int = None) -> str:
         # For longer times, show the actual time
         if timestamp:
             dt = datetime.fromtimestamp(timestamp)
+            now = datetime.now()
+            # Check if it's a different day
+            if dt.date() != now.date():
+                # Show date and time for different days
+                if dt.year != now.year:
+                    return f"{dt.strftime('%b %d, %Y')} at {dt.strftime('%I:%M %p').lstrip('0')}"
+                else:
+                    return f"{dt.strftime('%b %d')} at {dt.strftime('%I:%M %p').lstrip('0')}"
             return f"around {dt.strftime('%I:%M %p').lstrip('0')}"
         else:
             hours = minutes // 60
@@ -397,6 +405,14 @@ async def list_tools() -> list[Tool]:
                 "required": ["streak_type", "current"],
             },
         ),
+        Tool(
+            name="get_url",
+            description="Get the URL of the Coach Claude dashboard. Use this when the user forgets or asks for the URL to open the web page.",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
     ]
 
 
@@ -622,12 +638,29 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             result = "Recent workout logs:\n\n"
             for log in logs:
                 minutes_ago = (int(time.time()) - log.timestamp) // 60
+                time_ago_str = format_time_ago(minutes_ago, log.timestamp)
                 duration_str = (
                     f"{log.duration // 60}m {log.duration % 60}s"
                     if log.duration >= 60
                     else f"{log.duration}s"
                 )
-                result += f"ID {log.id}: {log.type} - '{log.name}' ({duration_str}) at {log.datetime.strftime('%I:%M %p')} ({minutes_ago} min ago)\n"
+                result += (
+                    f"ID {log.id}: {log.type} - '{log.name}' ({duration_str}) - {time_ago_str}\n"
+                )
+                # Include weight/reps if present
+                if log.weight is not None and log.reps is not None:
+                    total = log.weight * log.reps
+                    result += f"  Weight: {log.reps} reps x {log.weight}lb = {total}lb total\n"
+                elif log.weight is not None:
+                    result += f"  Weight: {log.weight}lb\n"
+                elif log.reps is not None:
+                    result += f"  Reps: {log.reps}\n"
+                # Include body parts if present
+                if log.body_parts:
+                    result += f"  Body parts: {log.body_parts}\n"
+                # Include notes if present
+                if log.notes:
+                    result += f"  Notes: {log.notes}\n"
             return [TextContent(type="text", text=result)]
 
         elif name == "delete_water":
@@ -751,6 +784,10 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 result += f" (best: {streak.longest})"
             return [TextContent(type="text", text=result)]
 
+        elif name == "get_url":
+            url = f"http://localhost:{DEFAULT_PORT}/"
+            return [TextContent(type="text", text=f"Coach Claude dashboard: {url}")]
+
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
@@ -778,12 +815,13 @@ def run_sse(host: str, port: int):
 
     async def render_stats_page() -> bytes:
         """Render a terminal-style stats page."""
-        from datetime import datetime
+        from datetime import datetime, timedelta
 
         stats = await db.get_stats("today")
         last_water = await db.get_last_water()
         last_workout = await db.get_last_workout()
         streaks = await db.get_streaks()
+        yearly_activity = await db.get_yearly_activity()
 
         # Get bedtime config
         bedtime_hour = int(await db.get_config_value("bedtime_hour"))
@@ -838,9 +876,16 @@ def run_sse(host: str, port: int):
         # Build content sections first to calculate width
         title = "COACH CLAUDE - TODAY"
 
+        # Get daily water goal for remaining calculation
+        daily_water_goal = float(await db.get_config_value("daily_water_goal") or 64)
+
         # Stats section
         stats_lines = []
-        water_str = f"{stats.total_water} {stats.water_unit}"
+        water_remaining = max(0, daily_water_goal - stats.total_water)
+        if water_remaining > 0:
+            water_str = f"{water_remaining:.0f} {stats.water_unit} left"
+        else:
+            water_str = "Goal met!"
         stats_lines.append(f"Water:       {water_str}")
         stats_lines.append(f"Workouts:    {stats.workout_count}")
         stats_lines.append(f"  Stretches: {stats.stretch_count}")
@@ -939,11 +984,47 @@ def run_sse(host: str, port: int):
                     else f"{w.duration}s"
                 )
                 time_str = w.datetime.strftime("%I:%M %p")
-                icon = "🧘" if w.type == "stretch" else "💪"
+
+                # Choose icon based on body parts or workout type
+                icon = ""
+                if w.body_parts:
+                    parts = w.body_parts.lower()
+                    if any(p in parts for p in ["chest", "pecs"]):
+                        icon = "🫁"
+                    elif any(p in parts for p in ["back", "lats"]):
+                        icon = "🔙"
+                    elif any(p in parts for p in ["leg", "quad", "hamstring", "glute", "calf"]):
+                        icon = "🦵"
+                    elif any(p in parts for p in ["arm", "bicep", "tricep"]):
+                        icon = "💪"
+                    elif any(p in parts for p in ["shoulder", "delt"]):
+                        icon = "🎯"
+                    elif any(p in parts for p in ["core", "ab"]):
+                        icon = "🧱"
+                    elif any(p in parts for p in ["neck"]):
+                        icon = "🦒"
+                if not icon:
+                    icon = "🧘" if w.type == "stretch" else "🏋️"
+
+                # Build details line (weight/reps)
+                details_html = ""
+                if w.weight is not None and w.reps is not None:
+                    total = w.weight * w.reps
+                    details_html = (
+                        f'<div class="workout-details">{w.reps} × {w.weight}lb = {total}lb</div>'
+                    )
+                elif w.weight is not None:
+                    details_html = f'<div class="workout-details">{w.weight}lb</div>'
+                elif w.reps is not None:
+                    details_html = f'<div class="workout-details">{w.reps} reps</div>'
+
                 workout_items.append(
                     f'<div class="workout-item">'
                     f'<span class="workout-icon">{icon}</span>'
+                    f'<div class="workout-info">'
                     f'<span class="workout-name">{w.name}</span>'
+                    f"{details_html}"
+                    f"</div>"
                     f'<span class="workout-duration">{duration_str}</span>'
                     f'<span class="workout-time">{time_str}</span>'
                     f"</div>"
@@ -951,6 +1032,65 @@ def run_sse(host: str, port: int):
             workout_list_html = "\n".join(workout_items)
         else:
             workout_list_html = '<div class="no-workouts">No workouts yet today</div>'
+
+        # Build activity grid (GitHub-style)
+        today = datetime.now().date()
+        # Start from ~52 weeks ago, aligned to Sunday
+        start_date = today - timedelta(days=364)
+        # Adjust to start on Sunday
+        start_date = start_date - timedelta(days=start_date.weekday() + 1)
+        if start_date.weekday() != 6:  # 6 = Sunday
+            start_date = start_date - timedelta(days=(start_date.weekday() + 1) % 7)
+
+        # Build grid data: 53 weeks x 7 days
+        grid_cells = []
+        current_date = start_date
+        week_cells = []
+
+        for _ in range(53 * 7):  # 53 weeks
+            if current_date > today:
+                week_cells.append('<div class="grid-cell empty"></div>')
+            else:
+                date_str = current_date.isoformat()
+                activity_data = yearly_activity.get(date_str, {"water": False, "workout": False})
+                water_met = activity_data.get("water", False)
+                workout_met = activity_data.get("workout", False)
+
+                if water_met and workout_met:
+                    cell_class = "both"
+                elif water_met:
+                    cell_class = "water"
+                elif workout_met:
+                    cell_class = "workout"
+                else:
+                    cell_class = "none"
+
+                tooltip = f"{current_date.strftime('%b %d')}: "
+                tooltip += (
+                    "Water + Workout"
+                    if water_met and workout_met
+                    else ("Water" if water_met else ("Workout" if workout_met else "No goals met"))
+                )
+                week_cells.append(f'<div class="grid-cell {cell_class}" title="{tooltip}"></div>')
+
+            current_date += timedelta(days=1)
+
+            # After 7 days, start a new week column
+            if len(week_cells) == 7:
+                grid_cells.append(f'<div class="grid-week">{"".join(week_cells)}</div>')
+                week_cells = []
+
+        activity_grid_html = "".join(grid_cells)
+
+        # Get current streak info for display
+        water_streak = streaks.get("water")
+        workout_streak = streaks.get("workout")
+        water_streak_str = (
+            f"{water_streak.current}d" if water_streak and water_streak.current > 0 else "0d"
+        )
+        workout_streak_str = (
+            f"{workout_streak.current}d" if workout_streak and workout_streak.current > 0 else "0d"
+        )
 
         db_path = str(get_db_path())
         html = f"""<!DOCTYPE html>
@@ -1056,26 +1196,120 @@ def run_sse(host: str, port: int):
         .workout-icon {{
             width: 24px;
             text-align: center;
+            align-self: flex-start;
+            padding-top: 2px;
+        }}
+        .workout-info {{
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            margin-left: 8px;
         }}
         .workout-name {{
-            flex: 1;
-            margin-left: 8px;
+        }}
+        .workout-details {{
+            font-size: 10px;
+            color: #888;
+            margin-top: 2px;
         }}
         .workout-duration {{
             color: #888;
             margin-left: 10px;
             font-size: 11px;
+            align-self: flex-start;
         }}
         .workout-time {{
             color: #666;
             margin-left: 10px;
             font-size: 11px;
+            align-self: flex-start;
         }}
         .no-workouts {{
             text-align: center;
             color: #666;
             font-size: 12px;
             padding: 10px;
+        }}
+        .activity-grid-container {{
+            margin-bottom: 20px;
+            text-align: center;
+        }}
+        .activity-grid-label {{
+            font-size: 12px;
+            margin-bottom: 8px;
+            color: #888;
+        }}
+        .activity-grid {{
+            display: flex;
+            gap: 2px;
+            justify-content: center;
+        }}
+        .grid-week {{
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }}
+        .grid-cell {{
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+            background: #2d2d2d;
+        }}
+        .grid-cell.empty {{
+            background: transparent;
+        }}
+        .grid-cell.none {{
+            background: #2d2d2d;
+        }}
+        .grid-cell.water {{
+            background: #0969da;
+        }}
+        .grid-cell.workout {{
+            background: #da6909;
+        }}
+        .grid-cell.both {{
+            background: #39d353;
+        }}
+        .grid-legend {{
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-top: 8px;
+            font-size: 10px;
+            color: #888;
+        }}
+        .legend-item {{
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }}
+        .legend-box {{
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+        }}
+        .legend-box.water {{
+            background: #0969da;
+        }}
+        .legend-box.workout {{
+            background: #da6909;
+        }}
+        .legend-box.both {{
+            background: #39d353;
+        }}
+        .streak-info {{
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-top: 10px;
+            font-size: 11px;
+        }}
+        .streak-item {{
+            color: #888;
+        }}
+        .streak-value {{
+            color: #00ff00;
+            font-weight: bold;
         }}
         .sessions-indicator {{
             position: fixed;
@@ -1141,6 +1375,21 @@ def run_sse(host: str, port: int):
     <a href="/summary" class="btn btn-top-left">30 Day Recap</a>
     <a href="/installation" class="btn btn-top-right">Installation</a>
     <button class="btn btn-bottom-left" onclick="copyDbPath()">Copy DB Path</button>
+    <div class="activity-grid-container">
+        <div class="activity-grid-label">YEARLY ACTIVITY</div>
+        <div class="activity-grid">
+            {activity_grid_html}
+        </div>
+        <div class="grid-legend">
+            <div class="legend-item"><div class="legend-box water"></div> Water</div>
+            <div class="legend-item"><div class="legend-box workout"></div> Workout</div>
+            <div class="legend-item"><div class="legend-box both"></div> Both</div>
+        </div>
+        <div class="streak-info">
+            <div class="streak-item">Water streak: <span class="streak-value">{water_streak_str}</span></div>
+            <div class="streak-item">Workout streak: <span class="streak-value">{workout_streak_str}</span></div>
+        </div>
+    </div>
     <pre>{terminal_output}</pre>
     <div class="bedtime-container">
         <div class="bedtime-label">BEDTIME COUNTDOWN</div>
