@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/flexed-biceps-right.png" width="80" alt="💪" /><img src="docs/mechanical-arm.png" width="80" alt="🦾" />
+<img src="https://raw.githubusercontent.com/ClutchEngineering/coach-claude/main/docs/flexed-biceps-right.png" width="80" alt="💪" /><img src="https://raw.githubusercontent.com/ClutchEngineering/coach-claude/main/docs/mechanical-arm.png" width="80" alt="🦾" />
 
 # Coach Claude
 
