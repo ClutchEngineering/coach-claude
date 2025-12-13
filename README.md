@@ -1,4 +1,10 @@
+<div align="center">
+
+<img src="https://em-content.zobj.net/source/apple/391/flexed-biceps_1f4aa.png" width="80" alt="💪" style="transform: scaleX(-1);" /><img src="https://em-content.zobj.net/source/apple/391/mechanical-arm_1f9be.png" width="80" alt="🦾" />
+
 # Coach Claude
+
+</div>
 
 A health and wellness system for developers that integrates seamlessly with Claude Code. Coach Claude helps you stay hydrated and active during coding sessions by suggesting water breaks and stretches during natural pauses in your workflow.
 
