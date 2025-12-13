@@ -25,6 +25,8 @@ claude mcp add coach-claude -t sse http://localhost:8787/sse
 
 Visit http://localhost:8787/ for your dashboard.
 
+<img src="https://raw.githubusercontent.com/ClutchEngineering/coach-claude/main/docs/webui.png" width="500" alt="Coach Claude web dashboard" />
+
 ## Features
 
 - **Smart Reminders**: Automatic check-ins at conversation start and during long sessions
@@ -37,14 +39,7 @@ Visit http://localhost:8787/ for your dashboard.
 
 ## How It Works
 
-```
-You: "Refactor this module"
-
-Claude: "I'll refactor that module for you. Quick heads up: it's been 90
-minutes since your last water - grab some while I work on this?
-
-[Proceeds with refactoring...]"
-```
+<img src="https://raw.githubusercontent.com/ClutchEngineering/coach-claude/main/docs/example-conversation.png" width="600" alt="Example conversation showing Coach Claude in action" />
 
 ## Commands
 
